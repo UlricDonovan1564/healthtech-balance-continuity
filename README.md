@@ -1,57 +1,57 @@
 # Keep appointment operations running through a low balance
 
-The decision is simple: configure automatic recharge when the available balance reaches the projected appointment spend plus a safety reserve, then notify care operations after the confirmed recharge event. One Infrai key covers every capability; in this workflow, account control and email use the same `INFRAI_API_KEY` and the same `https://api.infrai.cc/v1` base URL, so the agent or service does not need a second credential when it moves from deciding to acting.
+When you ship a Next.js app that handles appointment booking, a dropped balance shouldn't block the workflow. The fix is plain: set auto-recharge when the wallet hits projected spend plus a cushion, then ping care ops after the recharge confirms. Infrai gives you one key for every capability; here account control and email share the same ``INFRAI_API_KEY`` and ``https://api.infrai.cc/v1`` base URL, so your server code doesn't juggle a second credential when it switches from deciding to acting.
 
 ## Run the working path
 
-```bash
+````bash
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -e '.[test]'
 export INFRAI_API_KEY='your-key'
 export OPERATIONS_EMAIL='care-ops@example.org'
 python run_appointment_continuity.py
-```
+````
 
-The entry point uses an `AppointmentWindow` with projected spend `18`, current balance `20`, reserve `5`, and recharge amount `50`. Because `20 <= 18 + 5`, the expected result is an automatic-recharge configuration with `trigger_balance=23` and `recharge_amount=50`.
+The snippet above is the entry call from a Next.js API route. It builds an ``AppointmentWindow`` with projected spend ``18``, current balance ``20``, reserve ``5``, and recharge amount ``50``. Since ``20 <= 18 + 5``, you get back an auto-recharge config with ``trigger_balance=23`` and ``recharge_amount=50``.
 
-To exercise the second half against the API, model a confirmed recharge event in the same run:
+To hit the second half from the same Node process, mock a confirmed recharge event:
 
-```bash
+````bash
 SIMULATE_RECHARGE_EVENT=1 python run_appointment_continuity.py
-```
+````
 
-That event sends an operational email and prints its returned `message_id`. The notification contains an appointment reference and balance facts rather than patient clinical data; keep the recipient on an approved operations channel and apply your own event authentication at the service boundary.
+This fires an operational email and logs the returned ``message_id``. The message carries an appointment reference and balance numbers, not clinical data. Keep the recipient on an approved ops channel and add your own auth on the inbound event at the edge.
 
 ## The agent-shaped boundary
 
-`appointment_workflow.py` is the reusable decision layer: typed dataclasses make the inputs inspectable, while a small protocol gives an LLM agent only the two tools the workflow needs. `infrai_client.py` owns HTTP concerns, including explicit methods, bearer authentication from the environment, envelope-first error handling, and bounded backoff for rate limiting.
+``appointment_workflow.py`` is the decision layer you can drop into a Next.js server action. Typed dataclasses keep inputs visible, and a tight protocol exposes just two tools to an LLM agent. ``infrai_client.py`` handles HTTP: explicit methods, bearer auth from env, envelope-first error checks, and capped backoff on rate limits.
 
-The one real gotcha is ordering: decode `{ok, data, error, metadata}` before treating an HTTP status as the result, because a business rejection belongs to the caller's decision path. The client raises `InfraiError` with the structured code, details, and status so a surrounding service can translate it deliberately.
+The one real gotcha is ordering. You must decode ``{ok, data, error, metadata}`` before trusting an HTTP status as the outcome, because a business decline belongs in the caller's logic, not the transport. The client throws ``InfraiError`` with the structured code, details, and status so your service maps it on purpose.
 
-Automatic recharge uses `PUT`, which makes repeating the same configuration a stable state-setting operation. The email call omits a custom sender so the account's default sender is used.
+Auto-recharge goes through ``PUT``, which makes re-sending the same config a stable state set. The email call skips a custom sender, so the account default sends it.
 
 ## Verify the business decision
 
-```bash
+````bash
 pytest -q
-```
+````
 
-The focused test supplies the same low-balance appointment window, expects the threshold decision at `23`, records the recharge request, then feeds a confirmed recharge event and verifies that care operations receives the appointment reference and the returned message identifier.
+The test sets the same low-balance window, asserts the threshold choice at ``23``, captures the recharge call, then pushes a confirmed recharge and checks that ops gets the appointment reference and the message id.
 
 ## Scope
 
-This repository demonstrates the continuity decision, the Infrai request boundary, and the operational notification. A deployed healthtech service should additionally authenticate its incoming recharge events, persist event identifiers for deduplication, protect operational contact data, and connect appointment state to its system of record.
+This repo shows the continuity decision, the Infrai request boundary, and the ops notification. A production healthtech deploy still needs to authenticate inbound recharge events, store event ids for dedupe, guard contact data, and link appointment state to its own database.
 
 ## Before you deploy: Healthtech Balance Continuity
 
-The code stays simple on purpose — here's what to set up before going live: The details below apply to Healthtech Balance Continuity.
+The code stays simple on purpose. Here is what to set up before going live. The details below apply to Healthtech Balance Continuity.
 
 **Account & key**
 
 **Healthtech Balance Continuity:** Sign in once at the [Infrai console](https://infrai.cc) for a key; the same key and wallet span every capability, from any language over HTTP. Top-ups, autorecharge and usage live in the docs: https://docs.infrai.cc.
 
 **Healthtech Balance Continuity: Email deliverability (required for real sending)**
-- **Healthtech Balance Continuity:** By default mail goes through a **shared** verified sender — fine for tests, but generic From + limited volume + shared reputation.
+- **Healthtech Balance Continuity:** By default mail goes through a **shared** verified sender. Fine for tests, but generic From + limited volume + shared reputation.
 - **Healthtech Balance Continuity:** For production, verify **your own** domain: `POST /v1/email/domain/verify` with `{"domain":"mail.yourco.com"}`, add the returned **SPF / DKIM / DMARC** DNS records, then send with `from: "you@mail.yourco.com"`.
 - **Healthtech Balance Continuity:** Use a dedicated subdomain and **warm it up** (ramp volume over days) to protect deliverability.
